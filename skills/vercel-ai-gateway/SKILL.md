@@ -5,20 +5,20 @@ description: Route every LLM call through one unified API on Vercel — plain "p
 
 # Vercel AI Gateway
 
-You wire an app's LLM calls through **Vercel AI Gateway** (GA, Aug 2025): one
-endpoint, one API key, every provider behind it. The opinionated rule of this
-pack is *never reach for a provider-specific package by default*. Instead of
-`@ai-sdk/openai` + `@ai-sdk/anthropic` + `@ai-sdk/google` (each with its own SDK,
-its own key, its own billing), you pass a plain `"provider/model"` string to the
-AI SDK and let the Gateway resolve it. That single decision buys you provider
-failover, model fallbacks, unified cost tracking, and a one-line provider swap —
-for free, with no code change at the call site.
+You wire an app's LLM calls through **Vercel AI Gateway**: one endpoint, one API
+key, every provider behind it. The opinionated rule of this pack is *never reach
+for a provider-specific package by default*. Instead of `@ai-sdk/openai` +
+`@ai-sdk/anthropic` + `@ai-sdk/google` (each with its own SDK, its own key, its
+own billing), you pass a plain `"provider/model"` string to the AI SDK and let
+the Gateway resolve it. That single decision buys you provider failover, model
+fallbacks, unified cost tracking, and a one-line provider swap — for free, with
+no code change at the call site.
 
 This is the AI step of the curated *ship-a-Next.js-app-on-Vercel* path. It is
 deliberately **not** a clone of the official Vercel AI Gateway docs or CLI: it
 sequences the Gateway into the rest of the workflow. Provisioning the key and
 promoting it across environments is `vercel-env-management`; the function it runs
-in (Fluid Compute, full Node.js — Edge Functions are deprecated as of 2026) is
+in (Fluid Compute, full Node.js — the legacy Edge runtime is deprecated) is
 `vercel-edge-and-isr`; shipping it is `vercel-deploy-pipeline`. Rate-limiting or
 blocking abusive traffic to the AI route is `vercel-firewall-and-botid`, and
 app-level latency/caching of the route is `next-on-vercel-perf`. This skill owns
@@ -44,7 +44,7 @@ injects a `VERCEL_OIDC_TOKEN` automatically and the AI SDK's gateway provider
 picks it up. Write code that works in both places with one fallback:
 
 ```ts
-// Works locally (API key) AND on Vercel (OIDC, auto-injected). As of 2026.
+// Works locally (API key) AND on Vercel (OIDC, auto-injected).
 const apiKey = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN
 ```
 
@@ -109,6 +109,12 @@ const result = streamText({
 })
 ```
 
+Keep the fallback chain to 2–3 models: each failed hop can add up to a full
+request timeout to worst-case latency, and if three models across different
+providers all fail, the outage is systemic — a fourth entry buys nothing. Put at
+least one fallback on a *different provider* than the primary, or a provider-wide
+outage takes the whole chain down.
+
 The Gateway records each hop in response metadata (`modelAttempts` →
 `providerAttempts`) so you can see exactly which provider/model served the request
 and why an earlier one was skipped. Use fallbacks for anything user-facing; a
@@ -139,15 +145,20 @@ each API key carries an optional budget (`limitAmount` + `refreshPeriod`) and yo
 can read live spend from the quotas endpoint:
 
 ```bash
-# Live budget + spend for one AI Gateway key. As of 2026.
+# Live budget + spend for one AI Gateway key.
 curl "https://ai-gateway.vercel.sh/v1/quotas?quotaEntityId=api_key_id_<your_key_id>" \
   -H "Authorization: Bearer $AI_GATEWAY_API_KEY"
 # -> { "limitAmount": 10, "currentSpend": 1.04, "refreshPeriod": "monthly", "active": true }
 ```
 
 Give each environment its own key (prod, preview) via `vercel-env-management` so
-spend is attributable and a runaway preview cannot drain the prod budget. Run the
-estimator below before launch so the budget you set is grounded in real token math.
+spend is attributable and a runaway preview cannot drain the prod budget. Keep
+preview/dev key budgets small — $5–25/month is plenty for testing, and a runaway
+loop then trips at pocket change instead of at the invoice. Size the prod budget
+about 20% above estimated spend (the calculator below does this) so normal
+traffic never hits the cap. Note that per-token prices span roughly two orders of
+magnitude across models — always read the primary *and* fallback models' pricing
+from `gateway.getAvailableModels()` rather than assuming they are comparable.
 
 ## Quality bar
 
@@ -158,8 +169,8 @@ A Gateway integration is A+ only when all hold:
 - Exactly **one** credential path: `AI_GATEWAY_API_KEY` locally, `VERCEL_OIDC_TOKEN`
   on Vercel, expressed as the `||` fallback — keys provisioned via
   `vercel-env-management`, never committed.
-- Any user-facing call has **`models` fallbacks** (and `order` if the model is
-  multi-provider); a bare model string is used only for retryable internal work.
+- Any user-facing call has **`models` fallbacks** (2–3 entries, at least one on a
+  different provider); a bare model string is used only for retryable internal work.
 - Sensitive paths set **`zeroDataRetention: true`** and confirm every fallback
   provider is ZDR-capable.
 - Each environment key has a **budget**, and the launch budget was sized from the
@@ -298,7 +309,7 @@ becomes data (a string, a config value), not code (an import). That is what make
 failover (`models`), provider routing (`order`), one-key auth, and unified billing
 possible without touching the call. The only time you reach back for a
 provider-specific package is a genuinely provider-exclusive feature the Gateway
-does not yet surface — rare, and worth flagging explicitly when you do.
+does not surface — rare, and worth flagging explicitly when you do.
 
 ## references/provider-options-cheatsheet
 
